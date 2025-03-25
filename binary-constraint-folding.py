@@ -28,6 +28,7 @@ def comb_fn(X_struct):
     ci.c2 = x - 1
 
     # equality constraint
+    # TODO: change to something like |x0 * (x0 - 1)| + |x1 * (x1 - 1)| + ... = 0
     ce = pygransoStruct()
     ce.c1 = x * (x - 1)
     ce.c2 = x.T @ G @ x - 2
