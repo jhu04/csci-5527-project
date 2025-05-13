@@ -107,7 +107,7 @@ def evaluate(iteration, model, xv, tv, test_usol, error):
 
 
 if __name__ == "__main__":
-    device = torch.device('cuda')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     double_precision = torch.double
     torch.manual_seed(0)
 
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     hidden_size = 20
     num_layers = 7
 
-    data = scipy.io.loadmat('./burgers_shock.mat')
+    data = scipy.io.loadmat('./data/burgers_shock.mat')
 
     # Create PINN
     model = PINN(input_size, hidden_size, num_layers).to(device=device, dtype=double_precision)
