@@ -1,4 +1,8 @@
-# PyGRANSO
+# Comparing Constrained Optimizers for Training Physics-Informed Neural Networks
+
+This repository contains the code used for the corresponding project in `burgers-outputs` as well as scratch code. See PyGRANSO instructions below.
+
+## PyGRANSO
 
 ![PyGRANSO](./PyGRANSO_logo_banner.png)
 
