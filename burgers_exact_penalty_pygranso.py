@@ -4,7 +4,7 @@
 # ## Modules Importing
 # Import all necessary modules and add PyGRANSO src folder to system path. 
 
-# In[2]:
+# In[ ]:
 
 
 import time
@@ -13,7 +13,7 @@ import sys
 ## Adding PyGRANSO directories. Should be modified by user
 sys.path.append('.')
 from pygranso.pygranso import pygranso
-from pygranso.pygransoStruct import pygransoStruct 
+from pygranso.pygransoStruct import pygransoStruct
 from pygranso.private.getNvar import getNvarTorch
 import torch.nn as nn
 # from torchvision import datasets
@@ -25,22 +25,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-# In[3]:
+# In[ ]:
 
 
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # fix the random seed
-torch.manual_seed(55272025)
-pass
+seed = 55272025
+torch.manual_seed(seed)
+np.random.seed(seed)
 
 # w = 8
 
 
 # ## Model architecture
 
-# In[27]:
+# In[ ]:
 
 
 class PINN(nn.Module):
@@ -89,7 +90,7 @@ def get_grads(u, x, t):
 
 # ## Data setup
 
-# In[28]:
+# In[ ]:
 
 
 ###
@@ -168,14 +169,14 @@ def evaluate(iteration, model, xv, tv, test_usol, error):
 
 # # Exact Penalty with PyGRANSO
 
-# In[29]:
+# In[ ]:
 
 
 train_acc = []
 test_acc = []
 
 
-# In[39]:
+# In[ ]:
 
 
 def f(model, sample_points): # objective
@@ -188,18 +189,16 @@ def f(model, sample_points): # objective
     
     # Minimize residual
     res = u_t + u * u_x - 0.01 / np.pi * u_xx
-    # objective = torch.norm(res)
-    
-    objective = torch.norm(res) / res.numel() # TODO: try normalizing loss
+    objective = torch.norm(res) / res.numel()
     return objective
 
 def penalty(model, boundary_points, boundary_usol):
     xb, tb = boundary_points
     xtb = torch.cat((xb, tb), 1)
-    ub = model(xtb)    
+    ub = model(xtb)
+    
     boundary_errors = ub - boundary_usol
-    # return torch.norm(boundary_errors, p=1)
-    return torch.norm(boundary_errors, p=1) / boundary_errors.numel() # TODO: try normalizing loss
+    return torch.norm(boundary_errors, p=1) / boundary_errors.numel()
 
 def l2_penalty(model, boundary_points, boundary_usol):
     xb, tb = boundary_points
@@ -207,8 +206,7 @@ def l2_penalty(model, boundary_points, boundary_usol):
     ub = model(xtb)
     
     boundary_errors = ub - boundary_usol
-#     return torch.norm(boundary_errors, p=2)
-    return torch.norm(boundary_errors, p=2) / boundary_errors.numel() # TODO: try
+    return torch.norm(boundary_errors, p=2) / boundary_errors.numel()
 
 # explicitly takes following arguments:
 # sample_points: Tensor(2, n_sample_points)
@@ -224,19 +222,19 @@ def l2_penalty(model, boundary_points, boundary_usol):
 
 
 
-# In[40]:
+# In[ ]:
 
 
 # Adam stuff
 
-# def train_loop(model, mu, optimizer):
-#     model.train()
+def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
+    model.train()
     
-#     loss = phi1(model, mu)
+    loss = f_lambda(model) + mu * penalty_lambda(model)
 
-#     loss.backward()
-#     optimizer.step()
-#     optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
 
 # def val_loop(dataloader, model):
 #     model.eval()
@@ -262,7 +260,7 @@ def l2_penalty(model, boundary_points, boundary_usol):
 
 # ### 1000 inner epochs
 
-# In[49]:
+# In[ ]:
 
 
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
@@ -311,7 +309,7 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
         start = time.time()
         soln = pygranso(var_spec = model,combined_fn = comb_fn, user_opts = opts)
         end = time.time()
-        print("Total Wall Time: {}s".format(end - start))
+        print("Inner Loop Wall Time: {}s".format(end - start))
         torch.nn.utils.vector_to_parameters(soln.final.x, model.parameters())
         
         # Exact penalty update
@@ -332,7 +330,7 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
         print()
 
 
-# In[50]:
+# In[ ]:
 
 
 if __name__ == "__main__":
@@ -350,8 +348,8 @@ if __name__ == "__main__":
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
     max_iters = 200
     error = torch.empty(max_iters, device=device, dtype=double_precision)
-   
-    f_lambda = lambda model: f(model, sample_points)#*4560   
+    
+    f_lambda = lambda model: f(model, sample_points)
     penalty_lambda = lambda model: penalty(model, boundary_points, boundary_usol=usolb)#*4560
 
     exact_penalty_with_pygranso(
@@ -368,7 +366,7 @@ if __name__ == "__main__":
     
 
 
-# In[53]:
+# In[ ]:
 
 
 # x, t = sample_points
@@ -403,7 +401,7 @@ objective
 
 
 
-# In[55]:
+# In[ ]:
 
 
 def plot_pinn(model):
@@ -484,37 +482,50 @@ def plot_pinn(model):
 plot_pinn(model)
 
 
-# In[15]:
+# In[ ]:
 
 
 print(test_output.min(), test_output.max())
 
 
+# ### Loss
+
 # In[ ]:
 
 
+model.eval()
+
+test_output = model(grid_points)
+testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
+testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
 
 
+# In[ ]:
 
-# ### Train Acc
-
-# ### Test Acc
-
-# In[15]:
+print("Test res", torch.norm(testres))
 
 
-# val_loop(val_dataloader, model)
+# In[ ]:
+
+def evaluate2(iteration, model, xv, tv, test_usol, error):
+    """Difference"""
+    test_points = torch.stack((xv, tv)).transpose(0,1)
+    pred_usol = model(test_points)
+    L2_error = torch.norm(pred_usol.flatten() - test_usol) ** 2 / pred_usol.numel()
+    print(L2_error)
+
+evaluate2(0, model, xv, tv, usol_tensor, error)
 
 
 # ### Feasibility
 
-# In[16]:
+# In[ ]:
 
 
 penalty(model, boundary_points, boundary_usol=usolb)
 
 
-# In[17]:
+# In[ ]:
 
 
 l2_penalty(model, boundary_points, boundary_usol=usolb)
@@ -522,14 +533,14 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 
 # ### Graph
 
-# In[18]:
+# In[ ]:
 
 
 # import numpy as np
 # import matplotlib.pyplot as plt
 
 
-# In[19]:
+# In[ ]:
 
 
 # # Plot results
@@ -547,9 +558,8 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 # plt.show()
 
 
-# In[20]:
+# In[ ]:
 
 
-# train_acc_1000 = train_acc.copy()
-# test_acc_1000 = test_acc.copy()
-
+train_acc_1000 = train_acc.copy()
+test_acc_1000 = test_acc.copy()

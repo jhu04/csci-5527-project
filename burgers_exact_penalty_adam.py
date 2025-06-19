@@ -4,7 +4,7 @@
 # ## Modules Importing
 # Import all necessary modules and add PyGRANSO src folder to system path. 
 
-# In[1]:
+# In[ ]:
 
 
 import time
@@ -25,22 +25,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-# In[2]:
+# In[ ]:
 
 
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # fix the random seed
-torch.manual_seed(55272025)
-np.random.seed(5527)
+seed = 55272025
+torch.manual_seed(seed)
+np.random.seed(seed)
 
 # w = 8
 
 
 # ## Model architecture
 
-# In[3]:
+# In[ ]:
 
 
 class PINN(nn.Module):
@@ -89,17 +90,12 @@ def get_grads(u, x, t):
 
 # ## Data setup
 
-# In[4]:
-
-
-double_precision = torch.double
-
-
-# In[5]:
+# In[ ]:
 
 
 ###
 ### START data setup
+double_precision = torch.double
 data = scipy.io.loadmat('./data/burgers_shock.mat')
 
 # Get boundary points along three sides (x = -1, x = 1, t = 0)
@@ -173,14 +169,14 @@ def evaluate(iteration, model, xv, tv, test_usol, error):
 
 # # Exact Penalty with Adam
 
-# In[6]:
+# In[ ]:
 
 
 train_acc = []
 test_acc = []
 
 
-# In[7]:
+# In[ ]:
 
 
 def f(model, sample_points): # objective
@@ -216,8 +212,8 @@ def l2_penalty(model, boundary_points, boundary_usol):
 # sample_points: Tensor(2, n_sample_points)
 # boundary_points: Tensor(2, n_boundary_points)
 # boundary_usol: Tensor(n_boundary_points)
-def phi1(model, mu, sample_points, boundary_points, boundary_usol):
-    return f(model, sample_points) + mu * penalty(model, boundary_points, boundary_usol)
+# def phi1(model, mu, sample_points, boundary_points, boundary_usol):
+#     return f(model, sample_points) + mu * penalty(model, boundary_points, boundary_usol)
 
 
 # In[ ]:
@@ -226,7 +222,7 @@ def phi1(model, mu, sample_points, boundary_points, boundary_usol):
 
 
 
-# In[8]:
+# In[ ]:
 
 
 # Adam stuff
@@ -264,7 +260,7 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 
 # ### 1000 inner epochs
 
-# In[9]:
+# In[ ]:
 
 
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
@@ -315,8 +311,6 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
 # In[ ]:
 
 
-# model = RNN(input_size, hidden_size, num_layers, num_classes).to(device=device, dtype=double_precision)
-# exact_penalty_with_pygranso(mu_rho=1.1, mu_eps=1e-5
 if __name__ == "__main__":
     # NN hyperparams - width + depth are somewhat arbitrary and vary between papers
     input_size = 2
@@ -332,25 +326,8 @@ if __name__ == "__main__":
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
     max_iters = 200
     error = torch.empty(max_iters, device=device, dtype=double_precision)
-
-    # # Functions for optimizer
-    # comb_fn = lambda model: user_fn(model, sample_points, boundary_points, usolb)
-    # halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
-    #     evaluate(iteration, model, xv, tv, usol_tensor, error)
-
-#     # Pygranso Options
-#     opts = pygransoStruct()
-#     nvar = getNvarTorch(model.parameters())
-#     opts.x0 = nn.utils.parameters_to_vector(model.parameters()).detach().reshape(nvar,1)
-#     opts.torch_device = device
-#     opts.double_precision = True
-#     opts.print_level = 1
-#     opts.print_frequency = 10
-#     opts.disable_terminationcode_6 = True # Important for training NNs
-#     opts.maxit = max_iters
-#     opts.halt_log_fn = halt_log_fn   
     
-    f_lambda = lambda model: f(model, sample_points)   
+    f_lambda = lambda model: f(model, sample_points)
     penalty_lambda = lambda model: penalty(model, boundary_points, boundary_usol=usolb)
 
     exact_penalty_with_adam(
@@ -473,17 +450,17 @@ def plot_pinn(model):
     ax6.imshow(test_res_img, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
     plt.show()
 
-#         # Plot L2 loss over full grid
-#         iter_range = np.arange(1, soln.iters+1)
-#         error = error.detach().cpu().numpy()
-#         plt.plot(iter_range, error[:soln.iters])
-#         plt.xlabel("Iteration")
-#         plt.ylabel("Relative L2 loss")
-#         plt.show()
+    #     # Plot L2 loss over full grid
+    #     iter_range = np.arange(1, soln.iters+1)
+    #     error = error.detach().cpu().numpy()
+    #     plt.plot(iter_range, error[:soln.iters])
+    #     plt.xlabel("Iteration")
+    #     plt.ylabel("Relative L2 loss")
+    #     plt.show()
 plot_pinn(model)
 
 
-# In[42]:
+# In[ ]:
 
 
 print(test_output.min(), test_output.max())
@@ -491,7 +468,7 @@ print(test_output.min(), test_output.max())
 
 # ### Loss
 
-# In[43]:
+# In[ ]:
 
 
 model.eval()
@@ -501,16 +478,12 @@ testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
 testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
 
 
-# In[44]:
-
+# In[ ]:
 
 print("Test res", torch.norm(testres))
 
 
-# ### Difference
-
-# In[45]:
-
+# In[ ]:
 
 def evaluate2(iteration, model, xv, tv, test_usol, error):
     """Difference"""
@@ -524,13 +497,13 @@ evaluate2(0, model, xv, tv, usol_tensor, error)
 
 # ### Feasibility
 
-# In[46]:
+# In[ ]:
 
 
 penalty(model, boundary_points, boundary_usol=usolb)
 
 
-# In[47]:
+# In[ ]:
 
 
 l2_penalty(model, boundary_points, boundary_usol=usolb)
@@ -538,14 +511,14 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 
 # ### Graph
 
-# In[48]:
+# In[ ]:
 
 
 # import numpy as np
 # import matplotlib.pyplot as plt
 
 
-# In[19]:
+# In[ ]:
 
 
 # # Plot results
@@ -563,59 +536,8 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 # plt.show()
 
 
-# In[20]:
+# In[ ]:
 
 
 train_acc_1000 = train_acc.copy()
 test_acc_1000 = test_acc.copy()
-
-
-# ### 3000 inner epochs
-
-# In[21]:
-
-
-# train_acc = []
-# test_acc = []
-
-
-# ### Train Acc
-
-# In[24]:
-
-
-# model.eval()
-
-# logits = model(inputs)
-# _, predicted = torch.max(logits.data, 1)
-# correct = (predicted == labels).sum().item()
-# print("Final acc = {:.2f}%".format((100 * correct/len(inputs))))  
-
-
-# ### Test Acc
-
-# In[25]:
-
-
-# val_loop(val_dataloader, model)
-
-
-# ### Feasibility
-
-# In[27]:
-
-
-# penalty(model)
-
-
-# In[29]:
-
-
-# l2_penalty(model)
-
-
-# In[ ]:
-
-
-
-
