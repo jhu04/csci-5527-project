@@ -9,6 +9,7 @@
 
 import time
 import torch
+import scipy.io
 import sys
 ## Adding PyGRANSO directories. Should be modified by user
 sys.path.append('.')
@@ -44,6 +45,7 @@ np.random.seed(seed)
 # In[ ]:
 
 
+# Physics-informed neural network - a straightforward MLP with tanh activations
 class PINN(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers):
         super(PINN, self).__init__()
@@ -62,7 +64,8 @@ class PINN(nn.Module):
             x = self.activ(x)
         out = self.linear_out(x)
         return out
-    
+
+# Helper function to extract gradients of the NN outputs
 def get_grads(u, x, t):
     u_t = torch.autograd.grad(
         u, t,
@@ -85,7 +88,7 @@ def get_grads(u, x, t):
         create_graph=True
     )[0]
 
-    return u_t,u_x,u_xx
+    return u_t, u_x, u_xx
 
 
 # ## Data setup
@@ -116,8 +119,6 @@ usolb = np.vstack((usol_xlow, usol_xhigh, usol_tlow))
 xb = torch.Tensor(xb).to(device=device, dtype=double_precision).requires_grad_()
 tb = torch.Tensor(tb).to(device=device, dtype=double_precision).requires_grad_()
 usolb = torch.Tensor(usolb).to(device=device, dtype=double_precision).requires_grad_()
-
-# boundary_usol = usolb # point this global var at the right place
 
 boundary_points = (xb, tb)
 
@@ -150,7 +151,7 @@ grid_points = torch.stack((xv, tv)).transpose(0,1)
 def evaluate(iteration, model, xv, tv, test_usol, error):
     test_points = torch.stack((xv, tv)).transpose(0,1)
     pred_usol = model(test_points)
-    L2_error = torch.norm(pred_usol - test_usol)
+    L2_error = torch.norm(pred_usol - test_usol) / pred_usol.numel()
     error[iteration-1] = L2_error.cpu().detach().item()
 
     # Save intermediate results (NN outputs + PDE residuals) as images
@@ -258,7 +259,7 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 #     return 100*correct
 
 
-# ### 1000 inner epochs
+# ### Main training function
 
 # In[ ]:
 
@@ -272,7 +273,6 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
     
     optimizer = torch.optim.Adam(model.parameters())
 
-    # for iteration in range(1000):
     resets = 0
     for iteration in range(max_iters * n_inner_iters): # TODO: try smaller number of iterations (e.g. 2), and/or try Wenjie stopping strategy
         update = iteration % 500 == 0
@@ -312,6 +312,9 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
 
 
 if __name__ == "__main__":
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    torch.manual_seed(seed)
+
     # NN hyperparams - width + depth are somewhat arbitrary and vary between papers
     input_size = 2
     hidden_size = 20
@@ -319,7 +322,7 @@ if __name__ == "__main__":
     double_precision = torch.double
 
     # Create PINN
-    torch.manual_seed(552720250)
+    torch.manual_seed(seed)
     model = PINN(input_size, hidden_size, num_layers).to(device=device, dtype=double_precision)
     model.train()
 
@@ -338,10 +341,8 @@ if __name__ == "__main__":
         f_lambda=f_lambda,
         penalty_lambda=penalty_lambda,
         n_inner_iters=1000,
-        max_iters=100,
+        max_iters=max_iters,
     )
-    
-    
 
 
 # In[ ]:
@@ -395,11 +396,9 @@ def plot_pinn(model):
 
     global_min = np.min([np.min(outimg), np.min(usol_full), np.min(np.abs(outimg - usol_full))])
     global_max = np.max([np.max(outimg), np.max(usol_full), np.max(np.abs(outimg - usol_full))])
-
-    global_max = max(abs(global_max), abs(global_min))
+    
+    global_max = max(abs(global_min), abs(global_max))
     global_min = -global_max
-    #     global_min = -1
-    #     global_max = 1
 
     ax1.set_title("Predicted outputs from PINN")
     ax1.set_xlabel("t")
