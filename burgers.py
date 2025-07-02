@@ -508,8 +508,8 @@ if __name__ == "__main__":
             mu_eps=1e-5,
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
-            n_inner_iters=10,
-            max_iters=20,
+            n_inner_iters=1000,
+            max_iters=200,
         )
     elif optim == 'ep_pygranso':
         exact_penalty_with_pygranso(
@@ -519,15 +519,15 @@ if __name__ == "__main__":
             mu_eps=1e-5,
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
-            n_inner_iters=10,
-            max_iters=20,
+            n_inner_iters=1000,
+            max_iters=200,
         )
     elif optim == 'pygranso':
         directly_use_pygranso(
             model,
             mu_0=10.,
             user_fn_lambda=user_fn_lambda,
-            max_iters=10,
+            max_iters=1000,
         )
 
 
