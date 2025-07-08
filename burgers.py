@@ -146,7 +146,7 @@ grid_points = torch.stack((xv, tv)).transpose(0,1)
 ### END data setup
 ###
 
-def evaluate(iteration, model, xv, tv, test_usol, error, , log_error=True, save_images=True):
+def evaluate(iteration, model, xv, tv, test_usol, error, log_error=True, save_images=True):
     """
     Evaluates/logs the relative L2 error over all grid points
     Notably, this is NOT what the PINN objective, which only considers boundary points.
@@ -155,7 +155,7 @@ def evaluate(iteration, model, xv, tv, test_usol, error, , log_error=True, save_
     """
     test_points = torch.stack((xv, tv)).transpose(0,1)
     pred_usol = model(test_points)
-    L2_error = torch.norm(pred_usol - test_usol) / torch.sqrt(pred_usol.numel())
+    L2_error = torch.norm(pred_usol - test_usol) / np.sqrt(pred_usol.numel())
     
     if log_error:
         error[iteration-1] = L2_error.cpu().detach().item()
@@ -176,9 +176,8 @@ def evaluate(iteration, model, xv, tv, test_usol, error, , log_error=True, save_
     return L2_error
 
 def evaluate2(iteration, model, xv, tv, test_usol, error):
-    """Difference"""
     l2_error = evaluate(iteration, model, xv, tv, test_usol, error, log_error=False, save_images=False)
-    print(l2_error)
+    # print(l2_error)
     return l2_error
 
 
@@ -205,7 +204,7 @@ def f(model, sample_points): # objective
     
     # Minimize residual
     res = u_t + u * u_x - 0.01 / np.pi * u_xx
-    objective = torch.norm(res, p=2) / torch.sqrt(res.numel())
+    objective = torch.norm(res, p=2) / np.sqrt(res.numel())
     return objective
 
 def penalty(model, boundary_points, boundary_usol):
@@ -232,21 +231,16 @@ def l2_penalty(model, boundary_points, boundary_usol):
     ub = model(xtb)
     
     boundary_errors = ub - boundary_usol
-    return torch.norm(boundary_errors, p=2) / torch.sqrt(boundary_errors.numel())
+    return torch.norm(boundary_errors, p=2) / np.sqrt(boundary_errors.numel())
 
-# explicitly takes following arguments:
-# sample_points: Tensor(2, n_sample_points)
-# boundary_points: Tensor(2, n_boundary_points)
-# boundary_usol: Tensor(n_boundary_points)
-# def phi1(model, mu, sample_points, boundary_points, boundary_usol):
-#     return f(model, sample_points) + mu * penalty(model, boundary_points, boundary_usol)
-
-# User function specifying objective and constraints - required by PyGRANSO
-# explicitly takes following arguments:
-# sample_points: Tensor(2, n_sample_points)
-# boundary_points: Tensor(2, n_boundary_points)
-# boundary_usol: Tensor(n_boundary_points)
 def user_fn(model, sample_points, boundary_points, boundary_usol):
+    """
+    User function specifying objective and constraints - required by PyGRANSO\n
+    explicitly takes following arguments:\n
+    `sample_points`: Tensor(2, n_sample_points)\n
+    `boundary_points`: Tensor(2, n_boundary_points)\n
+    `boundary_usol`: Tensor(n_boundary_points)
+    """
     # Minimize residual
     objective = f(model, sample_points)
     xb, tb = boundary_points
@@ -265,13 +259,6 @@ def user_fn(model, sample_points, boundary_points, boundary_usol):
     ce = None
 
     return [objective,ci,ce]
-
-
-# In[ ]:
-
-
-
-
 
 # In[ ]:
 
@@ -482,7 +469,6 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
     opts.halt_log_fn = halt_log_fn
 
     # Hyperparameters
-#     opts.mu0 = 0.1
     opts.mu0 = mu_0
 
     # Main algorithm
@@ -494,94 +480,8 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
     )
     end = time.time()
     print("Total Wall Time: {}s".format(end - start))
-# In[ ]:
-
-
-if __name__ == "__main__":
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-    torch.manual_seed(seed)
-    
-    # hyperparams
-    optimizer_options = ['ep_adam', 'ep_pygranso', 'pygranso']
-    optim = 'ep_adam'
-    # optim = 'ep_pygranso'
-    # optim = 'pygranso'
-    print(f"Using optimizer {optim}")
-    print(f"Using seed {seed}")
-
-    # NN hyperparams - width + depth are somewhat arbitrary and vary between papers
-    input_size = 2
-    hidden_size = 20
-    num_layers = 7
-    double_precision = torch.double
-
-    # Create PINN
-    torch.manual_seed(seed)
-    model = PINN(input_size, hidden_size, num_layers).to(device=device, dtype=double_precision)
-    model.train()
-
-    # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    ERROR_LENGTH = 1000
-    error = torch.empty(ERROR_LENGTH, device=device, dtype=double_precision)
-    
-    # for ep methods
-    f_lambda = lambda model: f(model, sample_points)
-    penalty_lambda = lambda model: penalty(model, boundary_points, boundary_usol=usolb)
-
-    # for PyGRANSO
-    user_fn_lambda = lambda model: user_fn(model, sample_points, boundary_points, boundary_usol=usolb)
-
-    if optim == 'ep_adam':
-        exact_penalty_with_adam(
-            model,
-            mu_0=0.1,
-            mu_rho=1.1,
-            mu_eps=1e-5,
-            f_lambda=f_lambda,
-            penalty_lambda=penalty_lambda,
-            n_inner_iters=1000,
-            max_iters=200,
-        )
-    elif optim == 'ep_pygranso':
-        exact_penalty_with_pygranso(
-            model,
-            mu_0=0.1,
-            mu_rho=1.1,
-            mu_eps=1e-5,
-            f_lambda=f_lambda,
-            penalty_lambda=penalty_lambda,
-            n_inner_iters=1000,
-            max_iters=200,
-        )
-    elif optim == 'pygranso':
-        directly_use_pygranso(
-            model,
-            mu_0=10.,
-            user_fn_lambda=user_fn_lambda,
-            max_iters=1000,
-        )
-
 
 # In[ ]:
-
-objective = f(model, sample_points)
-objective
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
 
 def plot_pinn(model):
     model.eval()
@@ -656,61 +556,110 @@ def plot_pinn(model):
     #     plt.xlabel("Iteration")
     #     plt.ylabel("Relative L2 loss")
     #     plt.show()
-plot_pinn(model)
-
 
 # In[ ]:
 
+if __name__ == "__main__":
+    for optim in ['ep_adam', 'ep_pygranso', 'pygranso']:
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+        torch.manual_seed(seed)
+        
+        # hyperparams
+        allowed_optimizers = ['ep_adam', 'ep_pygranso', 'pygranso']
+        # optim = 'ep_adam'
+        # optim = 'ep_pygranso'
+        # optim = 'pygranso'
+        print(f"Using optimizer {optim}")
+        print(f"Using seed {seed}")
 
-# TODO: figure out what this was
-# print(test_output.min(), test_output.max())
+        # NN hyperparams - width + depth are somewhat arbitrary and vary between papers
+        input_size = 2
+        hidden_size = 20
+        num_layers = 7
+        double_precision = torch.double
 
+        # Create PINN
+        torch.manual_seed(seed)
+        model = PINN(input_size, hidden_size, num_layers).to(device=device, dtype=double_precision)
 
-# ### Loss
+        # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
+        ERROR_LENGTH = 1000
+        error = torch.empty(ERROR_LENGTH, device=device, dtype=double_precision)
+        
+        # for ep methods
+        f_lambda = lambda model: f(model, sample_points)
+        penalty_lambda = lambda model: penalty(model, boundary_points, boundary_usol=usolb)
 
-# In[ ]:
+        # for PyGRANSO
+        user_fn_lambda = lambda model: user_fn(model, sample_points, boundary_points, boundary_usol=usolb)
 
+        model.train()
+        if optim == 'ep_adam':
+            exact_penalty_with_adam(
+                model,
+                mu_0=0.1,
+                mu_rho=1.1,
+                mu_eps=1e-5,
+                f_lambda=f_lambda,
+                penalty_lambda=penalty_lambda,
+                n_inner_iters=1,
+                max_iters=2,
+            )
+        elif optim == 'ep_pygranso':
+            exact_penalty_with_pygranso(
+                model,
+                mu_0=0.1,
+                mu_rho=1.1,
+                mu_eps=1e-5,
+                f_lambda=f_lambda,
+                penalty_lambda=penalty_lambda,
+                n_inner_iters=1,
+                max_iters=2,
+            )
+        elif optim == 'pygranso':
+            directly_use_pygranso(
+                model,
+                mu_0=10.,
+                user_fn_lambda=user_fn_lambda,
+                max_iters=2,
+            )
+        else:
+            assert optim in allowed_optimizers
 
-model.eval()
+        # ### Final eval
 
-testres = f(model, grid_points)
-print("Test res", testres)
+        # In[ ]:
+        
+        model.eval()
+        print("\nModel results on training set (sampled and boundary points):")
+        objective = f(model, sample_points)
+        print("Final training objective: ", objective)
 
+        print("\nFeasibility:")
+        boundary_l1_error = penalty(model, boundary_points, boundary_usol=usolb)
+        print("Mean abs boundary violation (L1 penalty): ", boundary_l1_error)
+        boundary_l2_error = l2_penalty(model, boundary_points, boundary_usol=usolb)
+        print("RMS boundary violation (L2 penalty): ", boundary_l2_error)
 
-# In[ ]:
+        print("\nModel results on test set (full grid):")
 
+        # TODO: standardize if we're doing pairs of lists or tensors to specify points       
+        # test_objective = f(model, grid_points)
+        print(xv.shape)
+        print(tv.shape)
+        test_objective = f(model, [xv, tv])
+        print("PINN residual: ", test_objective)
+        test_grid_rmse = evaluate(0, model, xv, tv, usol_tensor, error, log_error=False, save_images=False)
+        print("Function value RMSE: ", test_grid_rmse)
 
-
-# In[ ]:
-
-evaluate2(0, model, xv, tv, usol_tensor, error)
-
-
-# ### Feasibility
-
-# In[ ]:
-
-
-penalty(model, boundary_points, boundary_usol=usolb)
-
-
-# In[ ]:
-
-
-l2_penalty(model, boundary_points, boundary_usol=usolb)
-
+        plot_pinn(model)
 
 # ### Graph
 
 # In[ ]:
 
-
 # import numpy as np
 # import matplotlib.pyplot as plt
-
-
-# In[ ]:
-
 
 # # Plot results
 # x = np.arange(1, len(train_acc)+1)
@@ -720,7 +669,7 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 
 # plt.xlabel('Outer Loop Iterations')
 # plt.ylabel('Accuracy (%)')
-# plt.title('Train vs Test Accuracy Over Time - EP w/ Adam (100 inner iterations)'.format(batch_size))
+# plt.title(f'Train vs Test Accuracy Over Time - seed:{seed}, optim:{optim}')
 
 # plt.legend()
 
