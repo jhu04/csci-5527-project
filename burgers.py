@@ -133,14 +133,28 @@ grid_points = torch.stack((xv, tv)).transpose(0,1)
 # Evaluates the relative L2 error over all grid points
 # Notably, this is NOT what the PINN is minimizing--it only has access to boundary points
 # NOTE: this appears to only be used in the Pygranso implementation
-def evaluate(iteration, model, xv, tv, test_usol, error):
+def evaluate(iteration, model, xv, tv, test_usol, metric_dict, penaltyfn_parts):
     test_points = torch.stack((xv, tv)).transpose(0,1)
     pred_usol = model(test_points)
-    L2_error = torch.norm(pred_usol - test_usol) / pred_usol.numel()
-    error[iteration-1] = L2_error.cpu().detach().item()
+
+    # Get test loss (normalized to same scale as train loss)
+    u = pred_usol.flatten()
+    u_t, u_x, u_xx = get_grads(u, xv, tv)
+    test_res = u_t + u * u_x - 0.01 / np.pi * u_xx
+    curr_test_err = torch.norm(test_res) / test_res.numel() * np.sqrt(25600 / 4560)
+
+    # Get u MSE
+    u_mse = torch.norm(pred_usol.flatten() - test_usol) ** 2 / pred_usol.numel()
+
+    # Track metrics
+    metric_dict["train_err"][iteration-1] = metric_dict["curr_train_err"][0].cpu().detach().item()
+    metric_dict["test_err"][iteration-1] = curr_test_err.cpu().detach().item()
+    metric_dict["feas"][iteration-1] = metric_dict["curr_feas"][0].cpu().detach().item()
+    metric_dict["u_mse"][iteration-1] = u_mse.cpu().detach().item()
+    metric_dict["mu"][iteration-1] = penaltyfn_parts.mu
 
     # Save intermediate results (NN outputs + PDE residuals) as images
-    if iteration % 25 == 0:
+    if iteration % 25 == 0 and iteration <= 1000:
         outimg = pred_usol.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
         plt.imsave("output_imgs/predicted_"+str(iteration)+".png", outimg, origin='upper')
@@ -151,9 +165,6 @@ def evaluate(iteration, model, xv, tv, test_usol, error):
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
         plt.imsave("output_imgs/pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper')
         plt.close()
-
-train_acc = []
-test_acc = []
 
 def f(model, sample_points): # objective
     x, t = sample_points
@@ -184,21 +195,15 @@ def l2_penalty(model, boundary_points, boundary_usol):
     boundary_errors = ub - boundary_usol
     return torch.norm(boundary_errors, p=2) / boundary_errors.numel()
 
-# explicitly takes following arguments:
-# sample_points: Tensor(2, n_sample_points)
-# boundary_points: Tensor(2, n_boundary_points)
-# boundary_usol: Tensor(n_boundary_points)
-# def phi1(model, mu, sample_points, boundary_points, boundary_usol):
-#     return f(model, sample_points) + mu * penalty(model, boundary_points, boundary_usol)
-
 # User function specifying objective and constraints - required by PyGRANSO
 # explicitly takes following arguments:
 # sample_points: Tensor(2, n_sample_points)
 # boundary_points: Tensor(2, n_boundary_points)
 # boundary_usol: Tensor(n_boundary_points)
-def user_fn(model, sample_points, boundary_points, boundary_usol):
+def user_fn(model, sample_points, boundary_points, boundary_usol, metric_dict):
     # Minimize residual
     objective = f(model, sample_points)
+
     xb, tb = boundary_points
     xtb = torch.cat((xb, tb), 1)
     ub = model(xtb)
@@ -208,8 +213,12 @@ def user_fn(model, sample_points, boundary_points, boundary_usol):
     # Constraint folding
     ci.c1 = l2_penalty(model, boundary_points, boundary_usol)
 
-    # Equality constraint on boundary points
-    # folded away into an inequality constraint
+    # Track error
+    # This func can be called >1 times per PyGRANSO iter, so we can't add to loss array yet
+    metric_dict["curr_train_err"][0] = objective.detach()
+    metric_dict["curr_feas"][0] = ci.c1.detach()
+
+    # Equality constraint on boundary points folded away into an inequality constraint
     # ce = pygransoStruct()
     # ce.c1 = ub - boundary_usol
     ce = None
@@ -253,7 +262,7 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
 # `penalty_lambda` takes form `lambda model: penalty_of_model`
 # these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=100):
+def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
     
@@ -295,7 +304,7 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
 # `penalty_lambda` takes form `lambda model: penalty_of_model`
 # these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=100):
+def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
 
@@ -362,7 +371,7 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
 # `user_fn_lambda` takes form `lambda model: [objective, ci, ce]`
 # this lambda should have other required info (e.g. training points) already baked into them
 # TODO: these args are incorrect (e.g. inner iterations)
-def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
+def directly_use_pygranso(model, user_fn_lambda, eval_fn, mu_0=1., max_iters=1000):
     # Functions for optimizer
 
 
@@ -394,8 +403,7 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
 
     # PyGRANSO
     comb_fn = user_fn_lambda
-    halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
-        evaluate(iteration, model, xv, tv, usol_tensor, error)
+    halt_log_fn = eval_fn
 
     # Pygranso Options
     opts = pygransoStruct()
@@ -424,6 +432,7 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
     )
     end = time.time()
     print("Total Wall Time: {}s".format(end - start))
+    return soln
 
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
@@ -450,16 +459,31 @@ if __name__ == "__main__":
     model.train()
 
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    ERROR_LENGTH = 1000
-    error = torch.empty(ERROR_LENGTH, device=device, dtype=double_precision)
+    max_iters = 1000
+    error = torch.empty(max_iters, device=device, dtype=double_precision)
+    train_err = torch.empty(max_iters, device=device, dtype=double_precision)
+    test_err = torch.empty(max_iters, device=device, dtype=double_precision)
+    u_mse = torch.empty(max_iters, device=device, dtype=double_precision)
+    feas = torch.empty(max_iters, device=device, dtype=double_precision)
+
+    metric_dict = {"error": error, "train_err": train_err, "test_err": test_err, "u_mse": u_mse, "feas": feas}
     
     # for ep methods
     f_lambda = lambda model: f(model, sample_points)
     penalty_lambda = lambda model: penalty(model, boundary_points, boundary_usol=usolb)
 
     # for PyGRANSO
-    user_fn_lambda = lambda model: user_fn(model, sample_points, boundary_points, boundary_usol=usolb)
+    user_fn_lambda = lambda model: user_fn(
+        model,
+        sample_points,
+        boundary_points,
+        boundary_usol=usolb,
+        metric_dict=metric_dict
+    )
+    halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
+        evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, penaltyfn_parts)
 
+    soln = None
     if optim == 'ep_adam':
         exact_penalty_with_adam(
             model,
@@ -469,7 +493,7 @@ if __name__ == "__main__":
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
             n_inner_iters=1000,
-            max_iters=200,
+            max_iters=max_iters,
         )
     elif optim == 'ep_pygranso':
         exact_penalty_with_pygranso(
@@ -480,37 +504,24 @@ if __name__ == "__main__":
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
             n_inner_iters=1000,
-            max_iters=200,
+            max_iters=max_iters,
         )
     elif optim == 'pygranso':
-        directly_use_pygranso(
+        metric_dict["curr_train_err"] = torch.empty(1, device=device, dtype=double_precision)
+        metric_dict["curr_feas"] = torch.empty(1, device=device, dtype=double_precision)
+        metric_dict["mu"] = torch.empty(max_iters, device=device, dtype=double_precision)
+        soln = directly_use_pygranso(
             model,
             mu_0=10.,
             user_fn_lambda=user_fn_lambda,
-            max_iters=1000,
+            eval_fn=halt_log_fn,
+            max_iters=max_iters,
         )
-
-# x, t = sample_points
-# xt = torch.cat((x, t), 1)
-# u = model(xt)
-# print(u)
-
-x, t = sample_points
-xt = torch.cat((x, t), 1)
-u = model(xt)
-
-# Calculate gradients of network
-u_t, u_x, u_xx = get_grads(u, x, t)
-
-# Minimize residual
-res = u_t + u * u_x - 0.01 / np.pi * u_xx
-objective = torch.norm(res)
 
 def plot_pinn(model):
     model.eval()
 
     test_output = model(grid_points)
-    #     test_sample_outputs = model(sample_points)
 
     # Plot predictions, GT, and error over the full range
     fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2,3, figsize=(18, 12))
@@ -572,58 +583,35 @@ def plot_pinn(model):
     ax6.imshow(test_res_img, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
     plt.show()
 
-    #     # Plot L2 loss over full grid
-    #     iter_range = np.arange(1, soln.iters+1)
-    #     error = error.detach().cpu().numpy()
-    #     plt.plot(iter_range, error[:soln.iters])
-    #     plt.xlabel("Iteration")
-    #     plt.ylabel("Relative L2 loss")
-    #     plt.show()
+    # Plot L2 loss (u MSE) over full grid
+    fig, ((ax1, ax2, ax3, ax4)) = plt.subplots(1, 4, figsize=(24, 6))
+    iter_range = np.arange(1, soln.iters+1)
+    
+    u_mse = metric_dict["u_mse"].detach().cpu().numpy()
+    ax1.semilogy(iter_range, u_mse[:soln.iters])
+    ax1.set_xlabel("Iteration")
+    ax1.set_ylabel("u MSE")
+    
+    train_err = metric_dict["train_err"].detach().cpu().numpy()
+    test_err = metric_dict["test_err"].detach().cpu().numpy()
+    ax2.semilogy(iter_range, train_err[:soln.iters], color='blue', label='Train error')
+    ax2.semilogy(iter_range, test_err[:soln.iters], color='green', label='Test error')
+    # ax2.plot(iter_range, train_err[:soln.iters] / test_err[:soln.iters])
+    ax2.set_xlabel("Iteration")
+    ax2.set_ylabel("Error (normalized for comparison)")
+    ax2.legend()
+    
+    feas = metric_dict["feas"].detach().cpu().numpy()
+    ax3.semilogy(iter_range, feas[:soln.iters])
+    ax3.set_xlabel("Iteration")
+    ax3.set_ylabel("Feasibility")
+    
+    mu = metric_dict["mu"].detach().cpu().numpy()
+    ax4.semilogy(iter_range, mu[:soln.iters])
+    ax4.set_xlabel("Iteration")
+    ax4.set_ylabel("Mu")
+
+    plt.show()
+
+
 plot_pinn(model)
-
-# TODO: figure out what this was
-# print(test_output.min(), test_output.max())
-
-# ### Loss
-
-model.eval()
-
-test_output = model(grid_points)
-testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
-testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
-
-print("Test res", torch.norm(testres))
-
-def evaluate2(iteration, model, xv, tv, test_usol, error):
-    """Difference"""
-    test_points = torch.stack((xv, tv)).transpose(0,1)
-    pred_usol = model(test_points)
-    L2_error = torch.norm(pred_usol.flatten() - test_usol) ** 2 / pred_usol.numel()
-    print(L2_error)
-
-evaluate2(0, model, xv, tv, usol_tensor, error)
-
-# ### Feasibility
-
-penalty(model, boundary_points, boundary_usol=usolb)
-
-l2_penalty(model, boundary_points, boundary_usol=usolb)
-
-# ### Graph
-
-# # Plot results
-# x = np.arange(1, len(train_acc)+1)
-
-# plt.plot(x, train_acc, label='Train set accuracy', marker='o')
-# plt.plot(x, test_acc, label='Test set accuracy', marker='s')
-
-# plt.xlabel('Outer Loop Iterations')
-# plt.ylabel('Accuracy (%)')
-# plt.title('Train vs Test Accuracy Over Time - EP w/ Adam (100 inner iterations)'.format(batch_size))
-
-# plt.legend()
-
-# plt.show()
-
-train_acc_1000 = train_acc.copy()
-test_acc_1000 = test_acc.copy()
