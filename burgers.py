@@ -4,9 +4,6 @@
 # ## Modules Importing
 # Import all necessary modules and add PyGRANSO src folder to system path. 
 
-# In[ ]:
-
-
 import time
 import torch
 import scipy.io
@@ -25,10 +22,6 @@ import scipy
 import numpy as np
 import matplotlib.pyplot as plt
 
-
-# In[ ]:
-
-
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -39,11 +32,7 @@ np.random.seed(seed)
 
 # w = 8
 
-
 # ## Model architecture
-
-# In[ ]:
-
 
 # Physics-informed neural network - a straightforward MLP with tanh activations
 class PINN(nn.Module):
@@ -90,11 +79,7 @@ def get_grads(u, x, t):
 
     return u_t, u_x, u_xx
 
-
 # ## Data setup
-
-# In[ ]:
-
 
 ###
 ### START data setup
@@ -144,7 +129,6 @@ tv = torch.Tensor(tv.flatten()).to(device=device, dtype=double_precision).requir
 xv = torch.Tensor(xv.flatten()).to(device=device, dtype=double_precision).requires_grad_()
 grid_points = torch.stack((xv, tv)).transpose(0,1)
 ### END data setup
-###
 
 # Evaluates the relative L2 error over all grid points
 # Notably, this is NOT what the PINN is minimizing--it only has access to boundary points
@@ -168,16 +152,8 @@ def evaluate(iteration, model, xv, tv, test_usol, error):
         plt.imsave("output_imgs/pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper')
         plt.close()
 
-
-# In[ ]:
-
-
 train_acc = []
 test_acc = []
-
-
-# In[ ]:
-
 
 def f(model, sample_points): # objective
     x, t = sample_points
@@ -240,16 +216,6 @@ def user_fn(model, sample_points, boundary_points, boundary_usol):
 
     return [objective,ci,ce]
 
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
 # Adam stuff
 
 def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
@@ -284,9 +250,6 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 
 # ### Main training function
 
-# In[ ]:
-
-
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
 # `penalty_lambda` takes form `lambda model: penalty_of_model`
 # these two lambdas should have other required info (e.g. training points) already baked into them
@@ -305,7 +268,6 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
         train_loop(model, mu, optimizer, f_lambda, penalty_lambda)
         
         # Exact penalty update
-        
         h = penalty_lambda(model)
         if update:
             print("Objective:", f_lambda(model))
@@ -326,7 +288,6 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
             h_prev = h
 
         # Choose new starting point (stay as optimal x1, x2)
-
         if update:
             print()
 
@@ -463,18 +424,17 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
     )
     end = time.time()
     print("Total Wall Time: {}s".format(end - start))
-# In[ ]:
-
 
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
     torch.manual_seed(seed)
     
+    # TODO: Take optimizer in as command-line argument
     # hyperparams
     optimizer_options = ['ep_adam', 'ep_pygranso', 'pygranso']
-    optim = 'ep_adam'
+    # optim = 'ep_adam'
     # optim = 'ep_pygranso'
-    # optim = 'pygranso'
+    optim = 'pygranso'
     print(f"Using optimizer {optim}")
     print(f"Using seed {seed}")
 
@@ -530,10 +490,6 @@ if __name__ == "__main__":
             max_iters=1000,
         )
 
-
-# In[ ]:
-
-
 # x, t = sample_points
 # xt = torch.cat((x, t), 1)
 # u = model(xt)
@@ -549,25 +505,6 @@ u_t, u_x, u_xx = get_grads(u, x, t)
 # Minimize residual
 res = u_t + u * u_x - 0.01 / np.pi * u_xx
 objective = torch.norm(res)
-
-# res.min()
-objective
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
 
 def plot_pinn(model):
     model.eval()
@@ -644,18 +581,10 @@ def plot_pinn(model):
     #     plt.show()
 plot_pinn(model)
 
-
-# In[ ]:
-
-
 # TODO: figure out what this was
 # print(test_output.min(), test_output.max())
 
-
 # ### Loss
-
-# In[ ]:
-
 
 model.eval()
 
@@ -663,13 +592,7 @@ test_output = model(grid_points)
 testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
 testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
 
-
-# In[ ]:
-
 print("Test res", torch.norm(testres))
-
-
-# In[ ]:
 
 def evaluate2(iteration, model, xv, tv, test_usol, error):
     """Difference"""
@@ -680,32 +603,13 @@ def evaluate2(iteration, model, xv, tv, test_usol, error):
 
 evaluate2(0, model, xv, tv, usol_tensor, error)
 
-
 # ### Feasibility
-
-# In[ ]:
-
 
 penalty(model, boundary_points, boundary_usol=usolb)
 
-
-# In[ ]:
-
-
 l2_penalty(model, boundary_points, boundary_usol=usolb)
 
-
 # ### Graph
-
-# In[ ]:
-
-
-# import numpy as np
-# import matplotlib.pyplot as plt
-
-
-# In[ ]:
-
 
 # # Plot results
 # x = np.arange(1, len(train_acc)+1)
@@ -720,10 +624,6 @@ l2_penalty(model, boundary_points, boundary_usol=usolb)
 # plt.legend()
 
 # plt.show()
-
-
-# In[ ]:
-
 
 train_acc_1000 = train_acc.copy()
 test_acc_1000 = test_acc.copy()
