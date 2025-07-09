@@ -132,8 +132,8 @@ grid_points = torch.stack((xv, tv)).transpose(0,1)
 
 # Evaluates the relative L2 error over all grid points
 # Notably, this is NOT what the PINN is minimizing--it only has access to boundary points
-# NOTE: this appears to only be used in the Pygranso implementation
-def evaluate(iteration, model, xv, tv, test_usol, metric_dict, penaltyfn_parts):
+# NOTE: This is only used in the PyGRANSO implementation
+def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     test_points = torch.stack((xv, tv)).transpose(0,1)
     pred_usol = model(test_points)
 
@@ -151,7 +151,7 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, penaltyfn_parts):
     metric_dict["test_err"][iteration-1] = curr_test_err.cpu().detach().item()
     metric_dict["feas"][iteration-1] = metric_dict["curr_feas"][0].cpu().detach().item()
     metric_dict["u_mse"][iteration-1] = u_mse.cpu().detach().item()
-    metric_dict["mu"][iteration-1] = penaltyfn_parts.mu
+    metric_dict["mu"][iteration-1] = mu
 
     # Save intermediate results (NN outputs + PDE residuals) as images
     if iteration % 25 == 0 and iteration <= 1000:
@@ -230,11 +230,15 @@ def user_fn(model, sample_points, boundary_points, boundary_usol, metric_dict):
 def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
     model.train()
     
-    loss = f_lambda(model) + mu * penalty_lambda(model)
+    train_err = f_lambda(model)
+    feas = penalty_lambda(model)
+    loss = train_err + mu * feas
 
     loss.backward()
     optimizer.step()
     optimizer.zero_grad()
+
+    return train_err, feas
 
 # def val_loop(dataloader, model):
 #     model.eval()
@@ -262,7 +266,7 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
 # `penalty_lambda` takes form `lambda model: penalty_of_model`
 # these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
+def exact_penalty_with_adam(model, f_lambda, penalty_lambda, metric_dict, eval_fn, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=100, max_iters=200):
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
     
@@ -274,7 +278,7 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
         if update:
             print("Iter", iteration)
         
-        train_loop(model, mu, optimizer, f_lambda, penalty_lambda)
+        train_err, feas = train_loop(model, mu, optimizer, f_lambda, penalty_lambda)
         
         # Exact penalty update
         h = penalty_lambda(model)
@@ -299,6 +303,12 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1
         # Choose new starting point (stay as optimal x1, x2)
         if update:
             print()
+        
+        # Track loss, etc.
+        if iteration % n_inner_iters == n_inner_iters - 1:
+            metric_dict["curr_train_err"][0] = train_err
+            metric_dict["curr_feas"][0] = feas
+            eval_fn(iteration // n_inner_iters + 1, model, metric_dict, mu)
 
 
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
@@ -441,9 +451,9 @@ if __name__ == "__main__":
     # TODO: Take optimizer in as command-line argument
     # hyperparams
     optimizer_options = ['ep_adam', 'ep_pygranso', 'pygranso']
-    # optim = 'ep_adam'
+    optim = 'ep_adam'
     # optim = 'ep_pygranso'
-    optim = 'pygranso'
+    # optim = 'pygranso'
     print(f"Using optimizer {optim}")
     print(f"Using seed {seed}")
 
@@ -459,14 +469,22 @@ if __name__ == "__main__":
     model.train()
 
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    max_iters = 1000
-    error = torch.empty(max_iters, device=device, dtype=double_precision)
+    max_iters = 50
     train_err = torch.empty(max_iters, device=device, dtype=double_precision)
     test_err = torch.empty(max_iters, device=device, dtype=double_precision)
     u_mse = torch.empty(max_iters, device=device, dtype=double_precision)
     feas = torch.empty(max_iters, device=device, dtype=double_precision)
+    mu = torch.empty(max_iters, device=device, dtype=double_precision)
+    curr_train_err = torch.empty(1, device=device, dtype=double_precision)
+    curr_feas = torch.empty(1, device=device, dtype=double_precision)
 
-    metric_dict = {"error": error, "train_err": train_err, "test_err": test_err, "u_mse": u_mse, "feas": feas}
+    metric_dict = {"train_err": train_err,
+                   "test_err": test_err,
+                   "u_mse": u_mse,
+                   "feas": feas,
+                   "mu": mu,
+                   "curr_train_err": curr_train_err,
+                   "curr_feas": curr_feas}
     
     # for ep methods
     f_lambda = lambda model: f(model, sample_points)
@@ -481,7 +499,9 @@ if __name__ == "__main__":
         metric_dict=metric_dict
     )
     halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
-        evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, penaltyfn_parts)
+        evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, penaltyfn_parts.mu)
+    ep_adam_eval_fn = lambda iteration, model, metric_dict, mu: \
+        evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, mu)
 
     soln = None
     if optim == 'ep_adam':
@@ -492,7 +512,9 @@ if __name__ == "__main__":
             mu_eps=1e-5,
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
-            n_inner_iters=1000,
+            metric_dict=metric_dict,
+            eval_fn=ep_adam_eval_fn,
+            n_inner_iters=100,
             max_iters=max_iters,
         )
     elif optim == 'ep_pygranso':
@@ -507,9 +529,6 @@ if __name__ == "__main__":
             max_iters=max_iters,
         )
     elif optim == 'pygranso':
-        metric_dict["curr_train_err"] = torch.empty(1, device=device, dtype=double_precision)
-        metric_dict["curr_feas"] = torch.empty(1, device=device, dtype=double_precision)
-        metric_dict["mu"] = torch.empty(max_iters, device=device, dtype=double_precision)
         soln = directly_use_pygranso(
             model,
             mu_0=10.,
@@ -585,29 +604,29 @@ def plot_pinn(model):
 
     # Plot L2 loss (u MSE) over full grid
     fig, ((ax1, ax2, ax3, ax4)) = plt.subplots(1, 4, figsize=(24, 6))
-    iter_range = np.arange(1, soln.iters+1)
+    iter_range = np.arange(1, max_iters+1)
     
     u_mse = metric_dict["u_mse"].detach().cpu().numpy()
-    ax1.semilogy(iter_range, u_mse[:soln.iters])
+    ax1.semilogy(iter_range, u_mse[:max_iters])
     ax1.set_xlabel("Iteration")
     ax1.set_ylabel("u MSE")
     
     train_err = metric_dict["train_err"].detach().cpu().numpy()
     test_err = metric_dict["test_err"].detach().cpu().numpy()
-    ax2.semilogy(iter_range, train_err[:soln.iters], color='blue', label='Train error')
-    ax2.semilogy(iter_range, test_err[:soln.iters], color='green', label='Test error')
+    ax2.semilogy(iter_range, train_err[:max_iters], color='blue', label='Train error')
+    ax2.semilogy(iter_range, test_err[:max_iters], color='green', label='Test error')
     # ax2.plot(iter_range, train_err[:soln.iters] / test_err[:soln.iters])
     ax2.set_xlabel("Iteration")
     ax2.set_ylabel("Error (normalized for comparison)")
     ax2.legend()
     
     feas = metric_dict["feas"].detach().cpu().numpy()
-    ax3.semilogy(iter_range, feas[:soln.iters])
+    ax3.semilogy(iter_range, feas[:max_iters])
     ax3.set_xlabel("Iteration")
     ax3.set_ylabel("Feasibility")
-    
+
     mu = metric_dict["mu"].detach().cpu().numpy()
-    ax4.semilogy(iter_range, mu[:soln.iters])
+    ax4.semilogy(iter_range, mu[:max_iters])
     ax4.set_xlabel("Iteration")
     ax4.set_ylabel("Mu")
 
