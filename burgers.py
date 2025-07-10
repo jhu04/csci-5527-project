@@ -314,7 +314,7 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, metric_dict, eval_f
 # `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
 # `penalty_lambda` takes form `lambda model: penalty_of_model`
 # these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
+def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, metric_dict, eval_fn, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
 
@@ -323,10 +323,15 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
         print("Iter", iteration)
         
         # PyGRANSO
-        def comb_fn(model):
+        def comb_fn(model, metric_dict):
             # objective function
-            # phi1_x_mu = phi1(model, mu, sample_points, boundary_points, boundary_usol)
-            phi1_x_mu = f_lambda(model) + mu * penalty_lambda(model)
+            train_err = f_lambda(model)
+            feas = penalty_lambda(model)
+            phi1_x_mu = train_err + mu * feas
+
+            # Track metrics
+            metric_dict["curr_train_err"][0] = train_err.detach()
+            metric_dict["curr_feas"][0] = feas.detach()
         
             # inequality constraint, matrix form
             ci = None
@@ -349,13 +354,14 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
         opts.torch_device = device
         opts.opt_tol = 1e-11
         opts.viol_eq_tol = 1e-8
+        opts.double_precision = True
         opts.print_level = 1
         opts.print_frequency = 50
         opts.maxit = n_inner_iters  # Inner epochs # TODO: perhaps tune
         opts.disable_terminationcode_6 = True # Important for training NNs
         
         start = time.time()
-        soln = pygranso(var_spec = model,combined_fn = comb_fn, user_opts = opts)
+        soln = pygranso(var_spec = model, combined_fn = lambda model: comb_fn(model, metric_dict), user_opts = opts)
         end = time.time()
         print("Inner Loop Wall Time: {}s".format(end - start))
         torch.nn.utils.vector_to_parameters(soln.final.x, model.parameters())
@@ -373,9 +379,7 @@ def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho
         if h > mu_eps:
             mu *= mu_rho
 
-        # Choose new starting point (stay as optimal x1, x2)
-
-        print()
+        eval_fn(iteration + 1, model, metric_dict, mu)
 
 
 # `user_fn_lambda` takes form `lambda model: [objective, ci, ce]`
@@ -451,8 +455,8 @@ if __name__ == "__main__":
     # TODO: Take optimizer in as command-line argument
     # hyperparams
     optimizer_options = ['ep_adam', 'ep_pygranso', 'pygranso']
-    optim = 'ep_adam'
-    # optim = 'ep_pygranso'
+    # optim = 'ep_adam'
+    optim = 'ep_pygranso'
     # optim = 'pygranso'
     print(f"Using optimizer {optim}")
     print(f"Using seed {seed}")
@@ -469,7 +473,7 @@ if __name__ == "__main__":
     model.train()
 
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    max_iters = 50
+    max_iters = 10
     train_err = torch.empty(max_iters, device=device, dtype=double_precision)
     test_err = torch.empty(max_iters, device=device, dtype=double_precision)
     u_mse = torch.empty(max_iters, device=device, dtype=double_precision)
@@ -500,7 +504,7 @@ if __name__ == "__main__":
     )
     halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
         evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, penaltyfn_parts.mu)
-    ep_adam_eval_fn = lambda iteration, model, metric_dict, mu: \
+    ep_eval_fn = lambda iteration, model, metric_dict, mu: \
         evaluate(iteration, model, xv, tv, usol_tensor, metric_dict, mu)
 
     soln = None
@@ -513,7 +517,7 @@ if __name__ == "__main__":
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
             metric_dict=metric_dict,
-            eval_fn=ep_adam_eval_fn,
+            eval_fn=ep_eval_fn,
             n_inner_iters=100,
             max_iters=max_iters,
         )
@@ -525,6 +529,8 @@ if __name__ == "__main__":
             mu_eps=1e-5,
             f_lambda=f_lambda,
             penalty_lambda=penalty_lambda,
+            metric_dict=metric_dict,
+            eval_fn=ep_eval_fn,
             n_inner_iters=1000,
             max_iters=max_iters,
         )
