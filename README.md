@@ -149,3 +149,21 @@ Thanks to other contributors and bug reporters:
 
 - [Chen Jiang](https://github.com/shoopshoop): Tested perceptual attack example (ex6). Tested PyGRANSO on Win10. Debugged updatePenaltyParameter function.
 
+
+## Notes on venv setup on MSI
+I have been burned by conda too many times (skill issue ig). Use uv:
+
+First, if you don't have uv installed
+```bash
+conda deactivate
+pip install uv
+export PATH=$PATH:~/.local/bin # add to path. Might be worth adding this line to your .bashrc
+```
+
+Then
+TODO: check if we also need to `module load cuda/11.2` first
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
