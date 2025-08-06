@@ -117,6 +117,7 @@ tb = np.vstack((tb_x, tb_x, tb_tlow))
 usolb = np.vstack((usol_xlow, usol_xhigh, usol_tlow))
 
 xb = torch.Tensor(xb).to(device=device, dtype=double_precision).requires_grad_()
+# print("xb.shape", xb.shape)
 tb = torch.Tensor(tb).to(device=device, dtype=double_precision).requires_grad_()
 usolb = torch.Tensor(usolb).to(device=device, dtype=double_precision).requires_grad_()
 
@@ -134,27 +135,34 @@ ts = np.random.rand(n_samples, 1)
 
 xs = torch.Tensor(xs).to(device=device, dtype=double_precision).requires_grad_()
 ts = torch.Tensor(ts).to(device=device, dtype=double_precision).requires_grad_()
+# print("xs.shape", xs.shape)
+# print("ts.shape", ts.shape)
 sample_points = (xs, ts)
 
 # Create grid inputs for visualization, comparison to GT
 xgridsize = 256
 tgridsize = 100
 tv, xv = np.meshgrid(data['t'], data['x'])
-tv = torch.Tensor(tv.flatten()).to(device=device, dtype=double_precision).requires_grad_()
-xv = torch.Tensor(xv.flatten()).to(device=device, dtype=double_precision).requires_grad_()
-grid_points = torch.stack((xv, tv)).transpose(0,1)
-### END data setup
-###
+tv = torch.Tensor(tv.flatten()).unsqueeze(1)\
+        .to(device=device, dtype=double_precision).requires_grad_()
+xv = torch.Tensor(xv.flatten()).unsqueeze(1)\
+        .to(device=device, dtype=double_precision).requires_grad_()
 
-def evaluate(iteration, model, xv, tv, test_usol, error, log_error=True, save_images=True):
+grid_points = torch.cat((xv, tv), 1)
+# print("grid_points.shape", grid_points.shape)
+
+def evaluate(iteration, model, xv, tv, test_usol, error, log_error=True, save_images=True, img_prefix=""):
     """
     Evaluates/logs the relative L2 error over all grid points
     Notably, this is NOT what the PINN objective, which only considers boundary points.
     Also saves intermediate results as images
     NOTE: this appears to only be used in the Pygranso implementation
     """
-    test_points = torch.stack((xv, tv)).transpose(0,1)
-    pred_usol = model(test_points)
+    test_points = torch.cat((xv, tv), 1)
+    # print("test_points.shape", test_points.shape)
+    pred_usol = model(test_points)#.squeeze(1)
+    # print("pred_usol.shape", pred_usol.shape)
+    # print("test_usol.shap-1", test_usol.shape)
     L2_error = torch.norm(pred_usol - test_usol) / np.sqrt(pred_usol.numel())
     
     if log_error:
@@ -164,13 +172,15 @@ def evaluate(iteration, model, xv, tv, test_usol, error, log_error=True, save_im
     if save_images and iteration % 25 == 0:
         outimg = pred_usol.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
-        plt.imsave("output_imgs/predicted_"+str(iteration)+".png", outimg, origin='upper')
+        plt.imsave(f"output_imgs/{img_prefix}predicted_"+str(iteration)+".png", outimg, origin='upper') # `img_prefix` thing is a bit scuffed, but I'm tired
         plt.close()
         evalu_t, evalu_x, evalu_xx = get_grads(pred_usol, xv, tv)
-        evalres = evalu_t + torch.flatten(pred_usol) * evalu_x - 0.01 / np.pi * evalu_xx
+        # print("evalu_x.shape", evalu_x.shape)
+        # print("evalu_t.shape", evalu_t.shape)
+        evalres = evalu_t + pred_usol * evalu_x - 0.01 / np.pi * evalu_xx
         outimg = evalres.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
-        plt.imsave("output_imgs/pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper')
+        plt.imsave(f"output_imgs/{img_prefix}pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper') # `img_prefix` thing is a bit scuffed, but I'm tired
         plt.close()
 
     return L2_error
@@ -452,7 +462,7 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
     # PyGRANSO
     comb_fn = user_fn_lambda
     halt_log_fn = lambda iteration, x, penaltyfn_parts, d,get_BFGS_state_fn, H_regularized, ls_evals, alpha, n_gradients, stat_vec, stat_val, fallback_level: \
-        evaluate(iteration, model, xv, tv, usol_tensor, error)
+        evaluate(iteration, model, xv, tv, usol_tensor, error, img_prefix="pygranso_")
 
     # Pygranso Options
     opts = pygransoStruct()
@@ -483,10 +493,11 @@ def directly_use_pygranso(model, user_fn_lambda, mu_0=1., max_iters=100):
 
 # In[ ]:
 
-def plot_pinn(model):
+def plot_pinn(model, img_path=None):
     model.eval()
 
     test_output = model(grid_points)
+    # print("test_output.shape", test_output.shape)
     #     test_sample_outputs = model(sample_points)
 
     # Plot predictions, GT, and error over the full range
@@ -521,7 +532,9 @@ def plot_pinn(model):
     # Calculate gradients of network
     testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
 
-    testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
+    # testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
+    testres = testu_t + test_output * testu_x - 0.01 / np.pi * testu_xx
+    # print("testres.shape", testres.shape)
 
     test_ut_img = testu_t.cpu().detach().numpy()
     test_ut_img = np.reshape(test_ut_img, (xgridsize, tgridsize))
@@ -548,6 +561,9 @@ def plot_pinn(model):
     ax6.set_box_aspect(1)
     ax6.imshow(test_res_img, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
     plt.show()
+
+    if img_path is not None:
+        plt.savefig(img_path)
 
     #     # Plot L2 loss over full grid
     #     iter_range = np.arange(1, soln.iters+1)
@@ -645,14 +661,14 @@ if __name__ == "__main__":
 
         # TODO: standardize if we're doing pairs of lists or tensors to specify points       
         # test_objective = f(model, grid_points)
-        print(xv.shape)
-        print(tv.shape)
+        # print("xv.shape", xv.shape)
+        # print("tv.shape", tv.shape)
         test_objective = f(model, [xv, tv])
         print("PINN residual: ", test_objective)
-        test_grid_rmse = evaluate(0, model, xv, tv, usol_tensor, error, log_error=False, save_images=False)
+        test_grid_rmse = evaluate(0, model, xv, tv, usol_tensor, error, log_error=False, save_images=True, img_prefix=optim+"_final_")
         print("Function value RMSE: ", test_grid_rmse)
 
-        plot_pinn(model)
+        plot_pinn(model, img_path=f"output_imgs/{optim}_final_plot.png")
 
 # ### Graph
 

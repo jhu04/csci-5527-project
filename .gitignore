@@ -80,3 +80,5 @@ examples/TMLR/constr_dl_orthogonal_constraint.py.lprof
 examples/TODO
 
 .idea
+output_imgs/
+.ipynb_checkpoints/
