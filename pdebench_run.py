@@ -91,8 +91,6 @@ def get_grads(u, x, t):
 ###
 ### START data setup
 double_precision = torch.double
-# data = scipy.io.loadmat('./data/burgers_shock.mat')
-# data = scipy.io.loadmat('./data/helmholtz.mat')
 data = {}
 all_data = np.load('./data/advection/1D_Advection_Sols_beta1.0.npy')
 data['usol'] = all_data[0]
@@ -101,29 +99,15 @@ data['usol_init'] = np.load("./data/advection/x_coordinate.npy")
 
 # Get boundary points along three sides (x = -1, x = 1, t = 0)
 tb_init = np.zeros_like(data['usol_init'])
-# xb_t = data['x']
-# xb_xlow = np.full_like(tb_x, data['x'][0])
-# xb_xhigh = np.full_like(tb_x, data['x'][-1])
 xb_init = np.linspace(0, 1, num=len(data['usol_init']))
-
-# burger's / helmholtz
-
-# usol_xlow = data['usol'][0,:,None]
-# usol_xhigh = data['usol'][-1,:,None]
-# usol_tlow = data['usol'][:,0,None]
-
-usol_init = np.load("./data/advection/x_coordinate.npy")
-usol_init = usol_init[:, None]
-
-## Burger's / helmholtz
-
-# xb = np.vstack((xb_xlow, xb_xhigh, xb_t))
-# tb = np.vstack((tb_x, tb_x, tb_tlow))
-# usolb = np.vstack((usol_xlow, usol_xhigh, usol_tlow))
 
 xb = xb_init[:,None]
 tb = tb_init[:,None]
-usolb = usol_init
+usolb = data['usol'][0]
+
+plt.plot(usolb)
+plt.title("Initial function")
+plt.show()
 
 print(data['t'].shape)
 print(data['usol_init'].shape)
@@ -136,15 +120,12 @@ usolb = torch.Tensor(usolb).to(device=device, dtype=double_precision).requires_g
 boundary_points = (xb, tb)
 
 # Ground-truth data - used for testing/evaluation
-# usol_full = data['usol']
-usol_full = np.vstack((data['usol_init'], data['usol']))
+usol_full = data['usol']
 usol_tensor = usol_full.flatten()
 usol_tensor = torch.Tensor(usol_tensor).to(device=device, dtype=double_precision)
 
 # Sample points. Following Dual-Cone Gradient Descent, 10x as many sample points as boundary points
 n_samples = 4560
-# xs = -1 + 2 * np.random.rand(n_samples, 1)
-# ts = np.random.rand(n_samples, 1)
 xs = np.random.rand(n_samples, 1)
 ts = 2 * np.random.rand(n_samples, 1)
 
@@ -153,13 +134,9 @@ ts = torch.Tensor(ts).to(device=device, dtype=double_precision).requires_grad_()
 sample_points = (xs, ts)
 
 # Create grid inputs for visualization, comparison to GT
-# xgridsize = 256 # burger's
-# tgridsize = 100 # burger's
-# tgridsize = 256 # helmholtz
 xgridsize = 1024
-tgridsize = 202
-# tv, xv = np.meshgrid(data['t'], data['x'])
-tv, xv = np.meshgrid(data['t'], xb_init)
+tgridsize = 201
+tv, xv = np.meshgrid(data['t'][:-1], xb_init) # PDEBench appends a surplus number for whatever reason
 tv = torch.Tensor(tv.flatten()).to(device=device, dtype=double_precision).requires_grad_()
 xv = torch.Tensor(xv.flatten()).to(device=device, dtype=double_precision).requires_grad_()
 grid_points = torch.stack((xv, tv)).transpose(0,1)
@@ -175,8 +152,6 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     # Get test loss (normalized to same scale as train loss)
     u = pred_usol.flatten()
     u_t, u_x, u_xx, u_tt = get_grads(u, xv, tv)
-    # test_res = u_t + u * u_x - 0.01 / np.pi * u_xx
-    # test_res = u_tt + u_xx + u - (1 - 17 * np.pi ** 2) * torch.sin(np.pi * xv) * torch.sin(4 * np.pi * tv)
     test_res = u_t + u_x # advection
     curr_test_err = torch.norm(test_res) / test_res.numel() * np.sqrt(25600 / 4560)
 
@@ -191,14 +166,12 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     metric_dict["mu"][iteration-1] = mu
 
     # Save intermediate results (NN outputs + PDE residuals) as images
-    if iteration % 25 == 0 and iteration <= 1000:
+    if (iteration < 50 or iteration % 25 == 0) and iteration <= 1000:
         outimg = pred_usol.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
         plt.imsave("output_imgs/predicted_"+str(iteration)+".png", outimg, origin='upper')
         plt.close()
         evalu_t, evalu_x, evalu_xx, evalu_tt = get_grads(pred_usol, xv, tv)
-        # evalres = evalu_t + torch.flatten(pred_usol) * evalu_x - 0.01 / np.pi * evalu_xx # burger's
-        # evalres = evalu_tt + evalu_xx + torch.flatten(pred_usol) - (1 - 17 * np.pi ** 2) * torch.sin(np.pi * xv) * torch.sin(4 * np.pi * tv) # helmholtz
         evalres = evalu_t + evalu_x # advection
         outimg = evalres.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
@@ -214,10 +187,8 @@ def f(model, sample_points): # objective
     u_t, u_x, u_xx, u_tt = get_grads(u, x, t)
     
     # Minimize residual
-    # res = u_t + u * u_x - 0.01 / np.pi * u_xx
-    # res = u_tt + u_xx + u - (1 - 17 * np.pi ** 2) * torch.sin(np.pi * x) * torch.sin(4 * np.pi * t)
     res = u_t + u_x
-    objective = torch.norm(res) / res.numel()
+    objective = torch.norm(res) / res.numel() # * 0 + 3
     return objective
 
 def penalty(model, boundary_points, boundary_usol):
@@ -233,8 +204,9 @@ def l2_penalty(model, boundary_points, boundary_usol):
     xtb = torch.cat((xb, tb), 1)
     ub = model(xtb)
     
-    boundary_errors = ub - boundary_usol
-    return torch.norm(boundary_errors, p=2) / boundary_errors.numel()
+    boundary_errors = ub.flatten() - boundary_usol
+    penalty = torch.norm(boundary_errors, p=2) / boundary_errors.numel() * 5000
+    return penalty
 
 # User function specifying objective and constraints - required by PyGRANSO
 # explicitly takes following arguments:
@@ -595,6 +567,9 @@ def plot_pinn(model):
     outimg = test_output.cpu().detach().numpy()
     outimg = np.reshape(outimg, (xgridsize, tgridsize))
 
+    usol_full = data['usol']
+    usol_full = np.transpose(usol_full)
+
     global_min = np.min([np.min(outimg), np.min(usol_full), np.min(np.abs(outimg - usol_full))])
     global_max = np.max([np.max(outimg), np.max(usol_full), np.max(np.abs(outimg - usol_full))])
     
@@ -607,7 +582,7 @@ def plot_pinn(model):
     ax1.set_box_aspect(1)
     ax1.imshow(outimg, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
 
-    ax2.set_title("Ground truth solution from burgers_shock.mat")
+    ax2.set_title("Ground truth solution")
     ax2.set_xlabel("t")
     ax2.set_ylabel("x")
     ax2.set_box_aspect(1)
@@ -622,8 +597,6 @@ def plot_pinn(model):
     # Calculate gradients of network
     testu_t, testu_x, testu_xx, testu_tt = get_grads(test_output, xv, tv)
 
-    # testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
-    # testres = testu_tt + testu_xx + torch.flatten(test_output) - (1 - 17 * np.pi ** 2) * torch.sin(np.pi * xv) * torch.sin(4 * np.pi * tv)
     testres = testu_t + testu_x
 
     test_ut_img = testu_t.cpu().detach().numpy()
