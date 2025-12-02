@@ -26,7 +26,7 @@ import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # fix the random seed
-seed = 55272026
+seed = 55272025
 torch.manual_seed(seed)
 np.random.seed(seed)
 
@@ -43,6 +43,10 @@ class PINN(nn.Module):
         self.linear_in = nn.Linear(input_size, hidden_size)
         self.linear_hidden = nn.ModuleList([nn.Linear(hidden_size, hidden_size) for i in range(num_layers - 1)])
         self.linear_out = nn.Linear(hidden_size, 1)
+        nn.init.xavier_uniform_(self.linear_in.weight)
+        nn.init.xavier_uniform_(self.linear_out.weight)
+        for hidden in self.linear_hidden:
+            nn.init.xavier_uniform_(hidden.weight)
         self.activ = nn.Tanh()
         
     def forward(self, x):
@@ -92,7 +96,7 @@ def get_grads(u, x, t):
 ### START data setup
 double_precision = torch.double
 data = {}
-all_data = np.load('./data/advection/1D_Advection_Sols_beta1.0.npy')
+all_data = np.load('./data/advection/1D_Advection_Sols_beta1.0.npy') # You will need to follow PDEBench repo instructions to get this data
 data['usol'] = all_data[0]
 data['t'] = np.load("./data/advection/t_coordinate.npy")
 data['usol_init'] = np.load("./data/advection/x_coordinate.npy")
@@ -153,7 +157,7 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     u = pred_usol.flatten()
     u_t, u_x, u_xx, u_tt = get_grads(u, xv, tv)
     test_res = u_t + u_x # advection
-    curr_test_err = torch.norm(test_res) / test_res.numel() * np.sqrt(25600 / 4560)
+    curr_test_err = torch.norm(test_res) / test_res.numel() * np.sqrt(201 * 1024 / 4560)
 
     # Get u MSE
     u_mse = torch.norm(pred_usol.flatten() - test_usol) ** 2 / pred_usol.numel()
@@ -166,7 +170,8 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     metric_dict["mu"][iteration-1] = mu
 
     # Save intermediate results (NN outputs + PDE residuals) as images
-    if (iteration < 50 or iteration % 25 == 0) and iteration <= 1000:
+    if (iteration < 500 and iteration % 10 == 0
+        ) or (iteration < 2000 and iteration % 50 == 0) or iteration % 200 == 0:
         outimg = pred_usol.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
         plt.imsave("output_imgs/predicted_"+str(iteration)+".png", outimg, origin='upper')
@@ -196,7 +201,7 @@ def penalty(model, boundary_points, boundary_usol):
     xtb = torch.cat((xb, tb), 1)
     ub = model(xtb)
     
-    boundary_errors = ub - boundary_usol
+    boundary_errors = ub.flatten() - boundary_usol
     return torch.norm(boundary_errors, p=1) / boundary_errors.numel()
 
 def l2_penalty(model, boundary_points, boundary_usol):
@@ -224,7 +229,7 @@ def user_fn(model, sample_points, boundary_points, boundary_usol, metric_dict):
     # No inequality constraints
     ci = pygransoStruct()
     # Constraint folding
-    ci.c1 = l2_penalty(model, boundary_points, boundary_usol)
+    ci.c1 = penalty(model, boundary_points, boundary_usol) # CHANGE THIS BETWEEN penalty() AND l2_penalty()
 
     # Track error
     # This func can be called >1 times per PyGRANSO iter, so we can't add to loss array yet
@@ -441,7 +446,7 @@ def directly_use_pygranso(model, user_fn_lambda, eval_fn, mu_0=1., max_iters=100
     opts.viol_eq_tol = 1e-8
     opts.double_precision = True
     opts.print_level = 1
-    opts.print_frequency = 10
+    opts.print_frequency = 50
     opts.disable_terminationcode_6 = True # Important for training NNs
     opts.maxit = max_iters
     opts.halt_log_fn = halt_log_fn
@@ -487,7 +492,7 @@ if __name__ == "__main__":
     model.train()
 
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    max_iters = 1000
+    max_iters = 20000
     train_err = torch.empty(max_iters, device=device, dtype=double_precision)
     test_err = torch.empty(max_iters, device=device, dtype=double_precision)
     u_mse = torch.empty(max_iters, device=device, dtype=double_precision)
@@ -545,13 +550,13 @@ if __name__ == "__main__":
             penalty_lambda=penalty_lambda,
             metric_dict=metric_dict,
             eval_fn=ep_eval_fn,
-            n_inner_iters=1000,
+            n_inner_iters=200,
             max_iters=max_iters,
         )
     elif optim == 'pygranso':
         soln = directly_use_pygranso(
             model,
-            mu_0=10.,
+            mu_0=10,
             user_fn_lambda=user_fn_lambda,
             eval_fn=halt_log_fn,
             max_iters=max_iters,
@@ -580,19 +585,19 @@ def plot_pinn(model):
     ax1.set_xlabel("t")
     ax1.set_ylabel("x")
     ax1.set_box_aspect(1)
-    ax1.imshow(outimg, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
+    ax1.imshow(outimg, vmin=global_min, vmax=global_max, extent=[0, 2, 1, 0], aspect='auto')
 
     ax2.set_title("Ground truth solution")
     ax2.set_xlabel("t")
     ax2.set_ylabel("x")
     ax2.set_box_aspect(1)
-    ax2.imshow(usol_full, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
+    ax2.imshow(usol_full, vmin=global_min, vmax=global_max, extent=[0, 2, 1, 0], aspect='auto')
 
     ax3.set_title("Difference")
     ax3.set_xlabel("t")
     ax3.set_ylabel("x")
     ax3.set_box_aspect(1)
-    ax3.imshow(usol_full - outimg, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
+    ax3.imshow(usol_full - outimg, vmin=global_min, vmax=global_max, extent=[0, 2, 1, 0], aspect='auto')
 
     # Calculate gradients of network
     testu_t, testu_x, testu_xx, testu_tt = get_grads(test_output, xv, tv)
@@ -610,19 +615,19 @@ def plot_pinn(model):
     ax4.set_xlabel("t")
     ax4.set_ylabel("x")
     ax4.set_box_aspect(1)
-    ax4.imshow(test_ut_img, extent=[0, 1, 1, -1], aspect='auto')
+    ax4.imshow(test_ut_img, extent=[0, 2, 1, 0], aspect='auto')
 
     ax5.set_title("Predicted derivative w.r.t. x")
     ax5.set_xlabel("t")
     ax5.set_ylabel("x")
     ax5.set_box_aspect(1)
-    ax5.imshow(test_ux_img, extent=[0, 1, 1, -1], aspect='auto')
+    ax5.imshow(test_ux_img, extent=[0, 2, 1, 0], aspect='auto')
 
     ax6.set_title("Predicted PDE residual")
     ax6.set_xlabel("t")
     ax6.set_ylabel("x")
     ax6.set_box_aspect(1)
-    ax6.imshow(test_res_img, vmin=global_min, vmax=global_max, extent=[0, 1, 1, -1], aspect='auto')
+    ax6.imshow(test_res_img, extent=[0, 2, 1, 0], aspect='auto')
     plt.show()
 
     # Plot L2 loss (u MSE) over full grid
