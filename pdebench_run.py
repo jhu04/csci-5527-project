@@ -470,6 +470,9 @@ if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
     print(f"Using device {device}")
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # TODO: Take optimizer in as command-line argument
     # hyperparams
@@ -487,12 +490,11 @@ if __name__ == "__main__":
     double_precision = torch.double
 
     # Create PINN
-    torch.manual_seed(seed)
     model = PINN(input_size, hidden_size, num_layers).to(device=device, dtype=double_precision)
     model.train()
 
     # Tensors have fixed size and we need to modify in-place, so initialize with maximum possible size
-    max_iters = 20000
+    max_iters = 100000
     train_err = torch.empty(max_iters, device=device, dtype=double_precision)
     test_err = torch.empty(max_iters, device=device, dtype=double_precision)
     u_mse = torch.empty(max_iters, device=device, dtype=double_precision)
