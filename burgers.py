@@ -102,6 +102,7 @@ tb = np.vstack((tb_x, tb_x, tb_tlow))
 usolb = np.vstack((usol_xlow, usol_xhigh, usol_tlow))
 
 xb = torch.Tensor(xb).to(device=device, dtype=double_precision).requires_grad_()
+# print("xb.shape", xb.shape)
 tb = torch.Tensor(tb).to(device=device, dtype=double_precision).requires_grad_()
 usolb = torch.Tensor(usolb).to(device=device, dtype=double_precision).requires_grad_()
 
@@ -119,6 +120,8 @@ ts = np.random.rand(n_samples, 1)
 
 xs = torch.Tensor(xs).to(device=device, dtype=double_precision).requires_grad_()
 ts = torch.Tensor(ts).to(device=device, dtype=double_precision).requires_grad_()
+# print("xs.shape", xs.shape)
+# print("ts.shape", ts.shape)
 sample_points = (xs, ts)
 
 # Create grid inputs for visualization, comparison to GT
@@ -157,16 +160,21 @@ def evaluate(iteration, model, xv, tv, test_usol, metric_dict, mu):
     if iteration % 25 == 0 and iteration <= 1000:
         outimg = pred_usol.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
-        plt.imsave("output_imgs/predicted_"+str(iteration)+".png", outimg, origin='upper')
+        plt.imsave(f"output_imgs/{img_prefix}predicted_"+str(iteration)+".png", outimg, origin='upper') # `img_prefix` thing is a bit scuffed, but I'm tired
         plt.close()
         evalu_t, evalu_x, evalu_xx = get_grads(pred_usol, xv, tv)
-        evalres = evalu_t + torch.flatten(pred_usol) * evalu_x - 0.01 / np.pi * evalu_xx
+        # print("evalu_x.shape", evalu_x.shape)
+        # print("evalu_t.shape", evalu_t.shape)
+        evalres = evalu_t + pred_usol * evalu_x - 0.01 / np.pi * evalu_xx
         outimg = evalres.cpu().detach().numpy()
         outimg = np.reshape(outimg, (xgridsize, tgridsize))
-        plt.imsave("output_imgs/pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper')
+        plt.imsave(f"output_imgs/{img_prefix}pderesidual_"+str(iteration)+".png", outimg, vmin=-3, vmax=3, origin='upper') # `img_prefix` thing is a bit scuffed, but I'm tired
         plt.close()
 
 def f(model, sample_points): # objective
+    """
+    Returns RMSE of PDE residual of `model` on `sample_points`
+    """   
     x, t = sample_points
     xt = torch.cat((x, t), 1)
     u = model(xt)
@@ -176,10 +184,15 @@ def f(model, sample_points): # objective
     
     # Minimize residual
     res = u_t + u * u_x - 0.01 / np.pi * u_xx
-    objective = torch.norm(res) / res.numel()
+    objective = torch.norm(res, p=2) / np.sqrt(res.numel())
     return objective
 
 def penalty(model, boundary_points, boundary_usol):
+    """ 
+    Returns l1 penalty for the constraint vector `model(boundary_points) - boundary_usol`,
+    divided by `dim of this vector` so its magnitude does not grow with # of boundary points.
+    (MAE of boundary violations)
+    """
     xb, tb = boundary_points
     xtb = torch.cat((xb, tb), 1)
     ub = model(xtb)
@@ -188,19 +201,26 @@ def penalty(model, boundary_points, boundary_usol):
     return torch.norm(boundary_errors, p=1) / boundary_errors.numel()
 
 def l2_penalty(model, boundary_points, boundary_usol):
+    """ 
+    Returns l2 penalty for the constraint vector `model(boundary_points) - boundary_usol`,
+    divided by `sqrt(dim of this vector)` so its magnitude does not grow with # of boundary points.
+    (RMSE of boundary violations)
+    """
     xb, tb = boundary_points
     xtb = torch.cat((xb, tb), 1)
     ub = model(xtb)
     
     boundary_errors = ub - boundary_usol
-    return torch.norm(boundary_errors, p=2) / boundary_errors.numel()
+    return torch.norm(boundary_errors, p=2) / np.sqrt(boundary_errors.numel())
 
-# User function specifying objective and constraints - required by PyGRANSO
-# explicitly takes following arguments:
-# sample_points: Tensor(2, n_sample_points)
-# boundary_points: Tensor(2, n_boundary_points)
-# boundary_usol: Tensor(n_boundary_points)
-def user_fn(model, sample_points, boundary_points, boundary_usol, metric_dict):
+def user_fn(model, sample_points, boundary_points, boundary_usol):
+    """
+    User function specifying objective and constraints - required by PyGRANSO\n
+    explicitly takes following arguments:\n
+    `sample_points`: Tensor(2, n_sample_points)\n
+    `boundary_points`: Tensor(2, n_boundary_points)\n
+    `boundary_usol`: Tensor(n_boundary_points)
+    """
     # Minimize residual
     objective = f(model, sample_points)
 
@@ -261,12 +281,14 @@ def train_loop(model, mu, optimizer, f_lambda, penalty_lambda):
 #     print(f"Error: \n Accuracy: {(100*correct):>0.1f}% \n")
 #     return 100*correct
 
-# ### Main training function
+# ### Main training functions
 
-# `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
-# `penalty_lambda` takes form `lambda model: penalty_of_model`
-# these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_adam(model, f_lambda, penalty_lambda, metric_dict, eval_fn, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=100, max_iters=200):
+def exact_penalty_with_adam(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=100):
+    """
+    `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
+    `penalty_lambda` takes form `lambda model: penalty_of_model`
+    these two lambdas should have other required info (e.g. training points) already baked into them
+    """
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
     
@@ -311,10 +333,12 @@ def exact_penalty_with_adam(model, f_lambda, penalty_lambda, metric_dict, eval_f
             eval_fn(iteration // n_inner_iters + 1, model, metric_dict, mu)
 
 
-# `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
-# `penalty_lambda` takes form `lambda model: penalty_of_model`
-# these two lambdas should have other required info (e.g. training points) already baked into them
-def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, metric_dict, eval_fn, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=200):
+def exact_penalty_with_pygranso(model, f_lambda, penalty_lambda, mu_0=1., mu_rho=1.1, mu_eps=1e-5, n_inner_iters=1000, max_iters=100):
+    """
+    `f_lambda` takes form `lambda model: loss_of_model_on_training_set`
+    `penalty_lambda` takes form `lambda model: penalty_of_model`
+    these two lambdas should have other required info (e.g. training points) already baked into them
+    """
     mu = torch.tensor([mu_0], dtype=double_precision).to(device)
     h_prev = float('inf')
 
@@ -434,7 +458,6 @@ def directly_use_pygranso(model, user_fn_lambda, eval_fn, mu_0=1., max_iters=100
     opts.halt_log_fn = halt_log_fn
 
     # Hyperparameters
-#     opts.mu0 = 0.1
     opts.mu0 = mu_0
 
     # Main algorithm
@@ -580,7 +603,9 @@ def plot_pinn(model):
     # Calculate gradients of network
     testu_t, testu_x, testu_xx = get_grads(test_output, xv, tv)
 
-    testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
+    # testres = testu_t + torch.flatten(test_output) * testu_x - 0.01 / np.pi * testu_xx
+    testres = testu_t + test_output * testu_x - 0.01 / np.pi * testu_xx
+    # print("testres.shape", testres.shape)
 
     test_ut_img = testu_t.cpu().detach().numpy()
     test_ut_img = np.reshape(test_ut_img, (xgridsize, tgridsize))
