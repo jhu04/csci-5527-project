@@ -1,0 +1,4 @@
+[submodule "PyGRANSO"]
+	path = PyGRANSO
+	url = git@github.com:sun-umn/PyGRANSO.git
+	branch = rd.release-pygranso-2-0-v2
